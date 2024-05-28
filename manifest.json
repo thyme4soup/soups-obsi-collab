@@ -1,11 +1,11 @@
 {
-	"id": "sample-plugin",
-	"name": "Sample Plugin",
+	"id": "soups-obsi-collab",
+	"name": "Soups Obsi Collab",
 	"version": "1.0.0",
 	"minAppVersion": "0.15.0",
-	"description": "Demonstrates some of the capabilities of the Obsidian API.",
-	"author": "Obsidian",
-	"authorUrl": "https://obsidian.md",
-	"fundingUrl": "https://obsidian.md/pricing",
+	"description": "Lets you share and collab on notes.",
+	"author": "thyme4soup",
+	"authorUrl": "https://souphub.io",
+	"fundingUrl": "https://souphub.io",
 	"isDesktopOnly": false
 }
