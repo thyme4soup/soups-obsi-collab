@@ -86,7 +86,7 @@ export class CollabFileCache {
 
     // 1/2: Get the patches to 'shadow' for sending to remote
     getPatchBlock(path: string, content: string) {
-        let patches = this.diffy.patch_make(this.fileCache[path].content, content);
+        let patches = this.diffy.patch_make(this.fileCache[path].content, content, undefined);
         this.fileCache[path].content = content;
         return this.diffy.patch_toText(patches);
     }
