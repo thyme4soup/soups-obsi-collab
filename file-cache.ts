@@ -1,16 +1,26 @@
 import { TAbstractFile } from "obsidian";
 import { DiffMatchPatch, Diff } from "diff-match-patch-ts";
+import * as path from "path";
 
 export interface FileShadow {
 	content: string
 }
+export interface UpdateItem {
+    // file path to update
+    path: string,
+    // epoch after which we can consume this update
+    visibility: number
+}
+
+let LOCK_TIMEOUT = 5000;
 
 export class CollabFileCache {
-    fileCache: {[path: string]: FileShadow};
+    fileCache: {[path: string]: FileShadow} = {};
+    updateLock: {[path: string]: number} = {};
+    updateQueue: UpdateItem[] = [];
     diffy = new DiffMatchPatch();
 
     constructor() {
-        this.fileCache = {};
     }
 
     createCachedFile(path: string, content: string) {
@@ -31,6 +41,47 @@ export class CollabFileCache {
 
     isTracked(path: string) {
         return path in this.fileCache;
+    }
+
+    // delay in ms
+    pushUpdate(path: string, delay: number) {
+        if (this.updateQueue.find((item) => item.path === path)) {
+            console.log("Already in queue: " + path);
+            return false;
+        } else {
+            this.updateQueue.push({
+                path: path,
+                visibility: Date.now() + delay
+            });
+            return true;
+        }
+    }
+
+    getNextUpdate(depth: number = 0): string | null {
+        let now = Date.now();
+        let nextUpdate = this.updateQueue[0];
+        if (depth >= this.updateQueue.length) {
+            return null;
+        } else if (nextUpdate && nextUpdate.visibility < now) {
+            return this.updateQueue.splice(depth, 1).shift()!.path;
+        } else {
+            return this.getNextUpdate(depth + 1);
+        }
+    }
+
+    acquireLock(path: string) {
+        if (path in this.updateLock && Date.now() - this.updateLock[path] < LOCK_TIMEOUT) {
+            return false;
+        } else if (path in this.updateLock) {
+            console.log("Overriding expired lock for " + path);
+            delete this.updateLock[path];
+        }
+        this.updateLock[path] = Date.now();
+        return true;
+    }
+
+    releaseLock(path: string) {
+        delete this.updateLock[path];
     }
 
     // 1/2: Get the patches to 'shadow' for sending to remote
