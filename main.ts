@@ -1,5 +1,4 @@
 import { App, DataWriteOptions, Editor, FileView, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile, TextComponent } from 'obsidian';
-import { DiffMatchPatch, PatchOperation } from 'diff-match-patch-ts';
 import { CollabFileCache, FileShadow } from 'file-cache';
 import { ServerRequest, ServerResponse, SyncUtil } from 'sync-util';
 // Remember to rename these classes and interfaces!

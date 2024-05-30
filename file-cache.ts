@@ -1,6 +1,4 @@
-import { TAbstractFile } from "obsidian";
-import { DiffMatchPatch, Diff } from "diff-match-patch-ts";
-import * as path from "path";
+import { DiffMatchPatch } from "diff-match-patch-typescript";
 
 export interface FileShadow {
 	content: string
