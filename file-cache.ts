@@ -1,4 +1,5 @@
 import { DiffMatchPatch } from "diff-match-patch-typescript";
+import * as crypto from 'crypto';
 
 export interface FileShadow {
 	content: string
@@ -9,8 +10,10 @@ export interface UpdateItem {
     // epoch after which we can consume this update
     visibility: number
 }
+const md5 = (contents: string) => crypto.createHash('md5').update(contents).digest("hex");
 
 let LOCK_TIMEOUT = 5000;
+
 
 export class CollabFileCache {
     fileCache: {[path: string]: FileShadow} = {};
@@ -96,5 +99,10 @@ export class CollabFileCache {
         let shadow_p = this.diffy.patch_apply(patches, this.fileCache[path].content)[0];
         this.fileCache[path].content = shadow_p;
         return content_p;
+    }
+
+    getChecksum(path: string) {
+        let content = this.getCachedFile(path)?.content || "";
+        return md5(content);
     }
 }

@@ -17,6 +17,15 @@ export interface ServerRequest {
     secretKey: string | null
 }
 
+export class FileDeletedError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = "FileDeletedError";
+    }
+}
+
+const API_VERSION = "v1";
+
 // This class contains helper commands for interacting with the remote server
 export class SyncUtil {
     app: App;
@@ -27,7 +36,12 @@ export class SyncUtil {
 
     constructor(app: App, endpoint: string) {
         this.app = app;
-        this.endpoint = endpoint;
+        // remove trailing slash
+        if (endpoint.endsWith("/")) {
+            this.endpoint = endpoint.slice(0, -1);
+        } else {
+            this.endpoint = endpoint;
+        }
     }
 
     async postPatch(request: ServerRequest): Promise<ServerResponse> {
@@ -37,7 +51,7 @@ export class SyncUtil {
         request.userId = this.userId;
         request.secretKey = request.secretKey || this.secretKey;
         // call the server with the patch
-        let url = this.endpoint + "/patch";
+        let url = [this.endpoint, API_VERSION, "patch"].join("/");
         let response = await fetch(url, {
             method: "POST",
             headers: {
@@ -47,6 +61,13 @@ export class SyncUtil {
         });
         let responseJSON = await response.json();
         // convert to ServerResponse
+        if (responseJSON.status == 409) {
+            if (responseJSON.content.contains("File is deleted")) {
+                throw new FileDeletedError("File is deleted");
+            }
+        } else if (responseJSON.status != 200) {
+            console.log(responseJSON);
+        }
         let responseObj: ServerResponse = {
             status: responseJSON.status,
             patch: responseJSON.patch,
@@ -58,7 +79,7 @@ export class SyncUtil {
     }
 
     async registerFile(path: string, root: string, content: string): Promise<string> {
-        let url = this.endpoint + "/register";
+        let url = [this.endpoint, API_VERSION, "register"].join("/");
         let response = await fetch(url, {
             method: "POST",
             headers: {
@@ -74,15 +95,39 @@ export class SyncUtil {
         });
         let responseJSON = await response.json()
         this.userId = this.userId || responseJSON.userId;
-        if (response.status != 200) {
+        if (responseJSON.status == 409) {
+            if (responseJSON.content.contains("File is deleted")) {
+                throw new FileDeletedError("File is deleted");
+            }
+        } else if (responseJSON.status != 200) {
             throw new Error("Failed to register file");
         }
         // return the shadow to track
         return responseJSON.content;
     }
 
+    async deleteFile(path: string, root: string): Promise<void> {
+        let url = [this.endpoint, API_VERSION, "delete"].join("/");
+        let response = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                path: path,
+                userId: this.userId,
+                secretKey: this.secretKey,
+                root: root
+            })
+        });
+        let responseJSON = await response.json()
+        if (response.status != 200) {
+            throw new Error("Failed to delete file\n" + responseJSON.content);
+        }
+    }
+
     async getRoot(root: string) {
-        let url = this.endpoint + "/root";
+        let url = [this.endpoint, API_VERSION, "root"].join("/");
         let response = await fetch(url, {
             method: "POST",
             headers: {
@@ -103,7 +148,7 @@ export class SyncUtil {
     }
 
     async registerRoot(): Promise<string> {
-        let url = this.endpoint + "/root";
+        let url = [this.endpoint, API_VERSION, "root"].join("/");
         let response = await fetch(url, {
             method: "POST",
             headers: {

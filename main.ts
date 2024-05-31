@@ -1,6 +1,6 @@
 import { App, DataWriteOptions, Editor, FileView, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile, TextComponent } from 'obsidian';
 import { CollabFileCache, FileShadow } from 'file-cache';
-import { ServerRequest, ServerResponse, SyncUtil } from 'sync-util';
+import { FileDeletedError, ServerRequest, ServerResponse, SyncUtil } from 'sync-util';
 // Remember to rename these classes and interfaces!
 
 interface PluginSettings {
@@ -32,15 +32,31 @@ export default class MyPlugin extends Plugin {
 		this.registerEvent(this.app.vault.on("modify", (file: TFile) => {
 			// on file modify, sync the file
 			if (this.fileCache.acquireLock(file.path)) {
-				this.syncLoop(file);
+				this.trySync(file);
 				this.fileCache.releaseLock(file.path);
 			}
 		}));
 		this.registerEvent(this.app.workspace.on("file-open", (file: TFile) => {
 			// on file modify, sync the file
 			if (this.fileCache.acquireLock(file.path)) {
-				this.syncLoop(file);
+				this.trySync(file);
 				this.fileCache.releaseLock(file.path);
+			}
+		}));
+		this.registerEvent(this.app.vault.on("delete", (file: TFile) => {
+			// on file delete, remove from cache
+			if (this.fileCache.isTracked(file.path)) {
+				this.deleteFile(file, this.getSharedRoot(file));
+			}
+		}));
+		this.registerEvent(this.app.vault.on("rename", async (file: TFile, oldPath: string) => {
+			// on file rename, delete old file and register new file
+			if (this.fileCache.isTracked(oldPath)) {
+				await this.deleteFileByPath(oldPath, this.getSharedRoot(file));
+				if (this.fileCache.acquireLock(file.path)) {
+					this.trySync(file);
+					this.fileCache.releaseLock(file.path);
+				}
 			}
 		}));
 		this.registerInterval(window.setInterval(async () => {
@@ -49,7 +65,7 @@ export default class MyPlugin extends Plugin {
 				if (leaf.view instanceof FileView) {
 					let file: TFile | null = leaf.view.file;
 					if (file && this.fileCache.isTracked(file.path) && this.fileCache.acquireLock(file.path)) {
-						await this.syncLoop(file);
+						await this.trySync(file);
 						this.fileCache.releaseLock(file.path);
 					}
 				}
@@ -73,7 +89,7 @@ export default class MyPlugin extends Plugin {
 			if (path && this.fileCache.acquireLock(path)) {
 				let file = this.app.vault.getAbstractFileByPath(path);
 				if (file instanceof TFile) {
-					await this.syncLoop(file);
+					await this.trySync(file);
 				}
 				this.fileCache.releaseLock(path);
 			} else if (path) {
@@ -117,18 +133,19 @@ export default class MyPlugin extends Plugin {
 	}
 
 	getLocalizedPath(file: TFile) {
-		let path = file.path;
-		for (let folder of Object.keys(this.settings.sharedFolders)) {
-			if (path.startsWith(folder)) {
-				let path_local = path.slice(folder.length);
-				// remove leading slash
-				if (path_local.startsWith("/")) {
-					path_local = path_local.slice(1);
-				}
-				return path_local;
-			}
+		return this.getLocalizedPathFromRoot(this.getSharedRoot(file), file.path);
+	}
+
+	getLocalizedPathFromRoot(root: string, path: string) {
+		if (!path) {
+			throw new Error("No path provided");
 		}
-		throw new Error("File not in shared folder: " + file.path);
+		let path_local = path.slice(root.length);
+		// remove leading slash
+		if (path_local.startsWith("/")) {
+			path_local = path_local.slice(1);
+		}
+		return path_local;
 	}
 
 	getSharedRoot(file: TFile) {
@@ -148,11 +165,38 @@ export default class MyPlugin extends Plugin {
 		// get the root directory
 		let root = this.settings.sharedFolders[folder];
 		let tree = await this.syncUtil.getRoot(root);
-		// walk the tree and create missing files
+		// walk the tree and create missing files or delete extra files
 		for (let localizedPath of tree) {
 			let path = folder + "/" + localizedPath;
-			if (!this.app.vault.getAbstractFileByPath(path)) {
+			let file_name = localizedPath.split("/").pop();
+			if (file_name.startsWith("DELETED_")) {
+				let real_file = file_name.slice(8);
+				let real_path = folder + "/" + real_file;
+				let real_file_obj = this.app.vault.getAbstractFileByPath(real_path);
+				if (real_file_obj instanceof TFile) {
+					await this.app.vault.delete(real_file_obj);
+				}
+			}
+			else if (!this.app.vault.getAbstractFileByPath(path)) {
 				await this.app.vault.create(path, "");
+			}
+		}
+	}
+
+	async trySync(file: TFile) {
+		if (file.name === "Untitled.md") {
+			return;
+		}
+		try {
+			await this.syncLoop(file);
+		} catch (e) {
+			if (e instanceof FileDeletedError) {
+				// file was deleted, remove from cache
+				delete this.fileCache.fileCache[file.path];
+				console.log("File deleted", file.path);
+				file.vault.delete(file);
+			} else {
+				console.log("Error syncing file", file.path, e);
 			}
 		}
 	}
@@ -162,11 +206,9 @@ export default class MyPlugin extends Plugin {
 			let path = this.getLocalizedPath(file);
 			let root = this.getSharedRoot(file);
 			let content = await file.vault.cachedRead(file);
+			let checksum = this.fileCache.getChecksum(file.path);
 			let shadow = this.fileCache.getCachedFile(file.path).content;
 			let outgoing_patch = this.fileCache.getPatchBlock(file.path, content);
-
-			// just use the whole file rn lol
-			let checksum = shadow;
 			// get response patch from server
 			let response = await this.syncUtil.postPatch({
 				patch: outgoing_patch,
@@ -179,14 +221,10 @@ export default class MyPlugin extends Plugin {
 			if (response.status == 200) {
 				// success
 				let incoming_patch: string = response.patch;
-				let checksum: string = response.checksum;
-				if (checksum != shadow) {
+				let incoming_checksum: string = response.checksum;
+				if (incoming_checksum != checksum) {
 					// checksums don't match
-					// abandon local changes and refresh content
-					console.log(response);
-					console.log("Checksums don't match for", file.path, "refreshing content to", response.checksum);
-					this.fileCache.updateCachedFile(file.path, response.checksum);
-					file.vault.modify(file, response.checksum);
+					// leave the file as is and get corrected next patch call
 					return;
 				}
 				// refresh content and ingest patch
@@ -221,8 +259,31 @@ export default class MyPlugin extends Plugin {
 	}
 
 	async registerFile(file: TFile, root: string) {
-		let shadow = await this.syncUtil.registerFile(this.getLocalizedPath(file), root, await file.vault.read(file));
-		this.fileCache.createCachedFile(file.path, shadow);
+		if (file.name === "Untitled.md") {
+			return;
+		}
+		try {
+			let shadow = await this.syncUtil.registerFile(this.getLocalizedPath(file), root, await file.vault.read(file));
+			this.fileCache.createCachedFile(file.path, shadow);
+		} catch (e) {
+			if (e instanceof FileDeletedError) {
+				// file was deleted, remove from cache
+				// ToDo: if file was recently created, ask if user wants to restore instead
+				delete this.fileCache.fileCache[file.path];
+				console.log("File deleted", file.path);
+				file.vault.delete(file);
+			} else {
+				console.log("Error registering file", file.path, e);
+			}
+		}
+	}
+
+	async deleteFile(file: TFile, root: string) {
+		await this.syncUtil.deleteFile(this.getLocalizedPath(file), root);
+	}
+
+	async deleteFileByPath(path: string, root: string) {
+		await this.syncUtil.deleteFile(this.getLocalizedPathFromRoot(root, path), root);
 	}
 }
 
@@ -243,7 +304,7 @@ class SettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('Broker Endpoint')
-			.setDesc('The endpoint for your broker service')
+			.setDesc('The endpoint for your broker service. Restart plugin after changing!')
 			.addText(text => text
 				.setPlaceholder('Enter your broker endpoint')
 				.setValue(this.plugin.settings.brokerEndpoint)
