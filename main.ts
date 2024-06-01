@@ -133,10 +133,11 @@ export default class MyPlugin extends Plugin {
 	}
 
 	getLocalizedPath(file: TFile) {
-		return this.getLocalizedPathFromRoot(this.getSharedRoot(file), file.path);
+		let parent_folder = Object.keys(this.settings.sharedFolders).find((folder) => file.path.startsWith(folder))!;
+		return this.getLocalizedPathFromRootPath(parent_folder, file.path);
 	}
 
-	getLocalizedPathFromRoot(root: string, path: string) {
+	getLocalizedPathFromRootPath(root: string, path: string) {
 		if (!path) {
 			throw new Error("No path provided");
 		}
@@ -197,6 +198,7 @@ export default class MyPlugin extends Plugin {
 				file.vault.delete(file);
 			} else {
 				console.log("Error syncing file", file.path, e);
+				throw e;
 			}
 		}
 	}
@@ -283,7 +285,7 @@ export default class MyPlugin extends Plugin {
 	}
 
 	async deleteFileByPath(path: string, root: string) {
-		await this.syncUtil.deleteFile(this.getLocalizedPathFromRoot(root, path), root);
+		await this.syncUtil.deleteFile(this.getLocalizedPathFromRootPath(root, path), root);
 	}
 }
 
