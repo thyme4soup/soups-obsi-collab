@@ -103,7 +103,11 @@ export default class MyPlugin extends Plugin {
 			// every Xs, sync all shared folders
 			let sharedFolders = Object.keys(this.settings.sharedFolders);
 			for (let folder of sharedFolders) {
-				await this.syncRoot(folder);
+				try {
+					await this.syncRoot(folder);
+				} catch (e) {
+					console.log("Failed to sync root", folder, e);
+				}
 			}
 		}, ROOT_REFRESH_FREQUENCY_MS * (1 + Math.random() * 0.1)));
 
@@ -179,6 +183,21 @@ export default class MyPlugin extends Plugin {
 				}
 			}
 			else if (!this.app.vault.getAbstractFileByPath(path)) {
+				// create each folder along the path
+				let folders = path.split("/").slice(0, -1);
+				let current_path = "";
+				for (let current_folder of folders) {
+					current_path += current_folder + "/";
+					if (!this.app.vault.getFolderByPath(current_path.slice(0, -1))) { // remove trailing slash
+						console.log("Creating folder", current_path);
+						try {
+							await this.app.vault.createFolder(current_path);
+						} catch (e) {
+							console.log("Failed to create folder", current_path, e);
+						}
+					}
+				}
+				// then create the file
 				await this.app.vault.create(path, "");
 			}
 		}
