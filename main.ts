@@ -1,4 +1,4 @@
-import { App, DataWriteOptions, Editor, FileView, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile, TextComponent } from 'obsidian';
+import { App, DataWriteOptions, Editor, FileView, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile, TextComponent, WorkspaceLeaf } from 'obsidian';
 import { CollabFileCache, FileShadow } from 'file-cache';
 import { FileDeletedError, ServerRequest, ServerResponse, SyncUtil } from 'sync-util';
 import { get } from 'http';
@@ -18,7 +18,7 @@ const SHARED_FOLDER_ROOT = "Shared"
 const SYNC_CALL_FREQUENCY_MS = 1000;
 const OPEN_IDLE_SYNC_FREQUENCY_MS = 3000;
 const FILE_REFRESH_FREQUENCY_MS = 30000;
-const ROOT_REFRESH_FREQUENCY_MS = 60000;
+const ROOT_REFRESH_FREQUENCY_MS = 10000;
 
 export default class MyPlugin extends Plugin {
 	settings: PluginSettings;
@@ -65,7 +65,7 @@ export default class MyPlugin extends Plugin {
 		}));
 		this.registerInterval(window.setInterval(async () => {
 			// every Xs, sync all open files
-			await this.app.workspace.getLeavesOfType("markdown").forEach(async (leaf) => {
+			let syncLeaf = async (leaf : WorkspaceLeaf) => {
 				if (leaf.view instanceof FileView) {
 					let file: TFile | null = leaf.view.file;
 					if (file && this.fileCache.isTracked(file.path) && this.fileCache.acquireLock(file.path)) {
@@ -73,6 +73,12 @@ export default class MyPlugin extends Plugin {
 						this.fileCache.releaseLock(file.path);
 					}
 				}
+			}
+			await this.app.workspace.getLeavesOfType("markdown").forEach(async (leaf) => {
+				await syncLeaf(leaf);
+			});
+			await this.app.workspace.getLeavesOfType("canvas").forEach(async (leaf) => {
+				await syncLeaf(leaf);
 			});
 		}, OPEN_IDLE_SYNC_FREQUENCY_MS * (1 + Math.random() * 0.1)));
 		this.registerInterval(window.setInterval(() => {
@@ -177,6 +183,23 @@ export default class MyPlugin extends Plugin {
 		if (!(root in this.settings.sharedFolders)) {
 			throw new Error("Root does not exist");
 		}
+		// create our shared folder if it doesn't exist
+		if (!this.app.vault.getFolderByPath(this.getRootPath(root))) {
+			// create each folder along the path
+			let folders = this.getRootPath(root).split("/");
+			let current_path = "";
+			for (let current_folder of folders) {
+				current_path += current_folder + "/";
+				if (!this.app.vault.getFolderByPath(current_path.slice(0, -1))) { // remove trailing slash
+					console.log("Creating folder", current_path);
+					try {
+						await this.app.vault.createFolder(current_path);
+					} catch (e) {
+						console.log("Failed to create folder", current_path, e);
+					}
+				}
+			}
+		}
 		// get the root directory
 		let folder = this.getRootPath(root);
 		let tree = await this.syncUtil.getRoot(root);
@@ -223,7 +246,7 @@ export default class MyPlugin extends Plugin {
 			if (e instanceof FileDeletedError) {
 				// file was deleted, remove from cache
 				delete this.fileCache.fileCache[file.path];
-				console.log("File deleted", file.path);
+				console.log("File deleted on remote", file.path);
 				file.vault.delete(file);
 			} else {
 				console.log("Error syncing file", file.path, e);
