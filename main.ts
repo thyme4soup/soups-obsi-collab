@@ -1,6 +1,7 @@
 import { App, DataWriteOptions, Editor, FileView, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting, TAbstractFile, TFile, TextComponent } from 'obsidian';
 import { CollabFileCache, FileShadow } from 'file-cache';
 import { FileDeletedError, ServerRequest, ServerResponse, SyncUtil } from 'sync-util';
+import { get } from 'http';
 // Remember to rename these classes and interfaces!
 
 interface PluginSettings {
@@ -12,6 +13,7 @@ const DEFAULT_SETTINGS: PluginSettings = {
 	brokerEndpoint: 'http://localhost:5000',
 	sharedFolders: {}
 }
+const SHARED_FOLDER_ROOT = "Shared"
 
 const SYNC_CALL_FREQUENCY_MS = 1000;
 const OPEN_IDLE_SYNC_FREQUENCY_MS = 3000;
@@ -38,7 +40,7 @@ export default class MyPlugin extends Plugin {
 		}));
 		this.registerEvent(this.app.workspace.on("file-open", (file: TFile) => {
 			// on file modify, sync the file
-			if (this.fileCache.acquireLock(file.path)) {
+			if (file != null && this.fileCache.acquireLock(file.path)) {
 				this.trySync(file);
 				this.fileCache.releaseLock(file.path);
 			}
@@ -47,6 +49,8 @@ export default class MyPlugin extends Plugin {
 			// on file delete, remove from cache
 			if (this.fileCache.isTracked(file.path)) {
 				this.deleteFile(file, this.getSharedRoot(file));
+			} else {
+				console.log("File not tracked", file.path);
 			}
 		}));
 		this.registerEvent(this.app.vault.on("rename", async (file: TFile, oldPath: string) => {
@@ -102,11 +106,11 @@ export default class MyPlugin extends Plugin {
 		this.registerInterval(window.setInterval(async () => {
 			// every Xs, sync all shared folders
 			let sharedFolders = Object.keys(this.settings.sharedFolders);
-			for (let folder of sharedFolders) {
+			for (let root of sharedFolders) {
 				try {
-					await this.syncRoot(folder);
+					await this.syncRoot(root);
 				} catch (e) {
-					console.log("Failed to sync root", folder, e);
+					console.log("Failed to sync root", root, e);
 				}
 			}
 		}, ROOT_REFRESH_FREQUENCY_MS * (1 + Math.random() * 0.1)));
@@ -136,16 +140,21 @@ export default class MyPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
+	getRootPath(root: string) {
+		return SHARED_FOLDER_ROOT + "/" + root;
+	}
+
 	getLocalizedPath(file: TFile) {
-		let parent_folder = Object.keys(this.settings.sharedFolders).find((folder) => file.path.startsWith(folder))!;
-		return this.getLocalizedPathFromRootPath(parent_folder, file.path);
+		let root = Object.keys(this.settings.sharedFolders).find((folder) => file.path.startsWith(this.getRootPath(folder)))!;
+		return this.getLocalizedPathFromRootPath(root, file.path);
 	}
 
 	getLocalizedPathFromRootPath(root: string, path: string) {
+		let root_path = this.getRootPath(root);
 		if (!path) {
 			throw new Error("No path provided");
 		}
-		let path_local = path.slice(root.length);
+		let path_local = path.slice(root_path.length);
 		// remove leading slash
 		if (path_local.startsWith("/")) {
 			path_local = path_local.slice(1);
@@ -153,22 +162,23 @@ export default class MyPlugin extends Plugin {
 		return path_local;
 	}
 
+	// handles when root isn't the shared uuid (old behavior)
 	getSharedRoot(file: TFile) {
 		for (let folder of Object.keys(this.settings.sharedFolders)) {
-			if (file.path.startsWith(folder)) {
+			if (file.path.startsWith(this.getRootPath(folder))) {
 				return this.settings.sharedFolders[folder];
 			}
 		}
 		throw new Error("File not in shared folder: " + file.path);
 	}
 
-	async syncRoot(folder: string) {
+	async syncRoot(root: string) {
 		// check if the root exists
-		if (!(folder in this.settings.sharedFolders)) {
+		if (!(root in this.settings.sharedFolders)) {
 			throw new Error("Root does not exist");
 		}
 		// get the root directory
-		let root = this.settings.sharedFolders[folder];
+		let folder = this.getRootPath(root);
 		let tree = await this.syncUtil.getRoot(root);
 		// walk the tree and create missing files or delete extra files
 		for (let localizedPath of tree) {
@@ -223,7 +233,7 @@ export default class MyPlugin extends Plugin {
 	}
 
 	async syncLoop(file: TFile) {
-		if (this.fileCache.isTracked(file.path) && Object.keys(this.settings.sharedFolders).some((folder) => file.path.startsWith(folder))) {
+		if (this.fileCache.isTracked(file.path) && Object.keys(this.settings.sharedFolders).some((root) => file.path.startsWith(this.getRootPath(root)))) {
 			let path = this.getLocalizedPath(file);
 			let root = this.getSharedRoot(file);
 			let content = await file.vault.cachedRead(file);
@@ -264,8 +274,8 @@ export default class MyPlugin extends Plugin {
 				if (response.content.contains("Root does not exist")) {
 					new Notice("Root does not exist for folder. Removing it!" + file.path);
 					// get the shared folder
-					let folder = Object.keys(this.settings.sharedFolders).find((folder) => file.path.startsWith(folder))!;
-					delete this.settings.sharedFolders[folder];
+					let root = this.getSharedRoot(file)!;
+					delete this.settings.sharedFolders[root];
 				} else {
 					// file not found, remove from cache
 					delete this.fileCache.fileCache[file.path];
@@ -273,7 +283,7 @@ export default class MyPlugin extends Plugin {
 			} else {
 				throw new Error("Server error" + response.status);
 			}
-		} else if (Object.keys(this.settings.sharedFolders).some((folder) => file.path.startsWith(folder))) {
+		} else if (Object.keys(this.settings.sharedFolders).some((root) => file.path.startsWith(this.getRootPath(root)))) {
 			console.log("Registering file", file.path);
 			await this.registerFile(file, this.getSharedRoot(file));
 		}

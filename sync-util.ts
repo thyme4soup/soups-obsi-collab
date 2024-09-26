@@ -107,6 +107,7 @@ export class SyncUtil {
     }
 
     async deleteFile(path: string, root: string): Promise<void> {
+        console.log("Posting delete request for", path, "in root", root);
         let url = [this.endpoint, API_VERSION, "delete"].join("/");
         let response = await fetch(url, {
             method: "POST",
