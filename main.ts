@@ -83,7 +83,7 @@ export default class MyPlugin extends Plugin {
 		}, OPEN_IDLE_SYNC_FREQUENCY_MS * (1 + Math.random() * 0.1)));
 		this.registerInterval(window.setInterval(() => {
 			// every Xs, enqueue files to be refreshed
-			let sharedFolders = Object.keys(this.settings.sharedFolders);
+			let sharedFolders = Object.keys(this.settings.sharedFolders).map((folder) => this.getRootPath(folder));
 			for (let folder of sharedFolders) {
 				let files = this.app.vault.getFiles().filter((file) => {
 					return file.path.startsWith(folder)
@@ -318,6 +318,8 @@ export default class MyPlugin extends Plugin {
 		} else if (Object.keys(this.settings.sharedFolders).some((root) => file.path.startsWith(this.getRootPath(root)))) {
 			console.log("Registering file", file.path);
 			await this.registerFile(file, this.getSharedRoot(file));
+		} else {
+			console.log("File not in shared folder, not syncing", file.path);
 		}
 	}
 
