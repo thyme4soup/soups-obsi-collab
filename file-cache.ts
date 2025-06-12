@@ -85,6 +85,15 @@ export class CollabFileCache {
         delete this.updateLock[path];
     }
 
+    revert(path: string, content: string) {
+        if (this.fileCache[path]) {
+            console.log("Reverting file to: " + content)
+            this.fileCache[path].content = content;
+        } else {
+            console.warn("Reverting a file that is not cached: " + path);
+        }
+    }
+
     // 1/2: Get the patches to 'shadow' for sending to remote
     getPatchBlock(path: string, content: string) {
         let patches = this.diffy.patch_make(this.fileCache[path].content, content, undefined);

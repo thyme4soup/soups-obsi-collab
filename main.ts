@@ -237,7 +237,7 @@ export default class MyPlugin extends Plugin {
 	}
 
 	async trySync(file: TFile) {
-		if (file.name === "Untitled.md") {
+		if (file.name === "Untitled.md" || file.name === "Untitled.canvas") {
 			return;
 		}
 		try {
@@ -264,47 +264,56 @@ export default class MyPlugin extends Plugin {
 			let shadow = this.fileCache.getCachedFile(file.path).content;
 			let outgoing_patch = this.fileCache.getPatchBlock(file.path, content);
 			// get response patch from server
-			let response = await this.syncUtil.postPatch({
-				patch: outgoing_patch,
-				path: path,
-				checksum: checksum,
-				root: root,
-				userId: null,
-				secretKey: null
-			});
-			if (response.status == 200) {
-				// success
-				let incoming_patch: string = response.patch;
-				let incoming_checksum: string = response.checksum;
-				if (incoming_checksum != checksum) {
-					// checksums don't match
-					// leave the file as is and get corrected next patch call
-					return;
-				}
-				// refresh content and ingest patch
-				content = await file.vault.read(file);
-				let content_p = this.fileCache.applyPatch(file.path, content, incoming_patch);
-				if (incoming_patch.length > 0) {
-					await file.vault.modify(file, content_p);
-				}
-			} else if (response.status == 409) {
-				// conflict
-				let new_shadow: string = response.content;
-				this.fileCache.updateCachedFile(file.path, new_shadow);
-				console.log("Conflict detected for", file.path, "refreshing content to", new_shadow);
-				file.vault.modify(file, new_shadow);
-			} else if (response.status == 404) {
-				if (response.content.contains("Root does not exist")) {
-					new Notice("Root does not exist for folder. Removing it!" + file.path);
-					// get the shared folder
-					let root = this.getSharedRoot(file)!;
-					delete this.settings.sharedFolders[root];
+			try {
+				let response = await this.syncUtil.postPatch({
+					patch: outgoing_patch,
+					path: path,
+					checksum: checksum,
+					root: root,
+					userId: null,
+					secretKey: null
+				});
+				if (response.status == 200) {
+					// success
+					let incoming_patch: string = response.patch;
+					let incoming_checksum: string = response.checksum;
+					if (incoming_checksum != checksum) {
+						// checksums don't match
+						// leave the file as is and get corrected next patch call
+						return;
+					}
+					// refresh content and ingest patch
+					content = await file.vault.read(file);
+					let content_p = this.fileCache.applyPatch(file.path, content, incoming_patch);
+					if (incoming_patch.length > 0) {
+						await file.vault.modify(file, content_p);
+					}
+				} else if (response.status == 409) {
+					// conflict
+					let new_shadow: string = response.content;
+					this.fileCache.updateCachedFile(file.path, new_shadow);
+					console.log("Conflict detected for", file.path, "refreshing content to", new_shadow);
+					file.vault.modify(file, new_shadow);
+				} else if (response.status == 404) {
+					if (response.content.contains("Root does not exist")) {
+						new Notice("Root does not exist for folder. Removing it!" + file.path);
+						// get the shared folder
+						let root = this.getSharedRoot(file)!;
+						delete this.settings.sharedFolders[root];
+					} else {
+						// file not found, remove from cache
+						delete this.fileCache.fileCache[file.path];
+					}
 				} else {
-					// file not found, remove from cache
-					delete this.fileCache.fileCache[file.path];
+					// some other error, log it
+					console.log("Error syncing file", file.path, response);
+					throw new Error("Server error: " + response.content);
 				}
-			} else {
-				throw new Error("Server error" + response.status);
+			} catch (e) {
+				// revert the shadow
+				console.log("Error syncing file", file.path, e);
+				this.fileCache.revert(file.path, shadow);
+				throw e;
 			}
 		} else if (Object.keys(this.settings.sharedFolders).some((root) => file.path.startsWith(this.getRootPath(root)))) {
 			console.log("Registering file", file.path);
@@ -381,14 +390,6 @@ class SettingTab extends PluginSettingTab {
 			console.log("Adding setting for", sharedFolder);
 			new Setting(containerEl)
 			  .setName(sharedFolder)
-			  .addText(text => {
-				text.setValue(this.plugin.settings.sharedFolders[sharedFolder])
-				text.disabled = true;
-				text.onChange(async (value) => {
-					this.plugin.settings.sharedFolders[sharedFolder] = value;
-					await this.plugin.saveSettings();
-				});
-			  })
 			  .addButton(btn => {
 				btn.setIcon('cross');
 				btn.setTooltip('Remove this shared folder');
@@ -411,27 +412,25 @@ class SettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Share a folder')
 			.setDesc('Register a folder with your server to start sharing')
-			.addText(text => {
-				text.setPlaceholder('Enter your folder path')
-					.setValue("")
-				this.registerFolderField = text;
-			})
 			.addButton(button => button
 				.setButtonText('Register')
 				.onClick(async () => {
-					let folder = this.registerFolderField.getValue();
 					try {
 						let root = await this.plugin.syncUtil.registerRoot();
-						console.log("Registered folder", folder, "with root", root);
-						this.plugin.settings.sharedFolders[folder] = root;
+						console.log("Registered folder", root);
+						this.plugin.settings.sharedFolders[root] = root;
 						this.plugin.saveSettings();
+						try {
+							await this.app.vault.createFolder(this.plugin.getRootPath(root));
+						} catch (e) {
+							console.log("Failed to create the folder, will leave it for now", e);
+						}
 						// reload the tab
 						this.display();
 					} catch (e) {
 						new Notice("Failed to register folder");
 						console.log("Failed to register folder", e);
 					}
-					this.registerFolderField.setValue("");
 				}));
 		new Setting(containerEl)
 			.setName('Join a folder')
@@ -449,9 +448,9 @@ class SettingTab extends PluginSettingTab {
 						try {
 							let tree = await this.plugin.syncUtil.getRoot(root);
 							// just use the root as the folder
-							await this.app.vault.createFolder(root);
+							await this.app.vault.createFolder(this.plugin.getRootPath(root));
 						} catch (e) {
-							
+							throw e;
 						}
 						this.plugin.settings.sharedFolders[root] = root;
 						console.log("Registered folder", root);
@@ -459,10 +458,11 @@ class SettingTab extends PluginSettingTab {
 						// reload the tab
 						this.display();
 					} catch (e) {
-						new Notice("Failed to register folder");
-						if (e.message != "Folder already exists") {
+						console.log("Failed to register folder", e);
+						if (e.message.contains("Folder already exists")) {
+							new Notice("Can't register a folder that already exists!");
 							console.log("Folder already exists", e);
-						} else if (e.message != "Root does not exist") {
+						} else if (e.message.contains("Root does not exist")) {
 							console.log("Root does not exist", e);
 						} else {
 							console.log("Uncaught error", e);
