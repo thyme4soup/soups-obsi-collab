@@ -318,8 +318,6 @@ export default class MyPlugin extends Plugin {
 		} else if (Object.keys(this.settings.sharedFolders).some((root) => file.path.startsWith(this.getRootPath(root)))) {
 			console.log("Registering file", file.path);
 			await this.registerFile(file, this.getSharedRoot(file));
-		} else {
-			console.log("File not in shared folder, not syncing", file.path);
 		}
 	}
 

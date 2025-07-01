@@ -47,7 +47,6 @@ export class CollabFileCache {
     // delay in ms
     pushUpdate(path: string, delay: number) {
         if (this.updateQueue.find((item) => item.path === path)) {
-            console.log("Already in queue: " + path);
             return false;
         } else {
             this.updateQueue.push({
@@ -90,7 +89,7 @@ export class CollabFileCache {
             console.log("Reverting file to: " + content)
             this.fileCache[path].content = content;
         } else {
-            console.warn("Reverting a file that is not cached: " + path);
+            console.warn("Can't revert a file that is not cached: " + path);
         }
     }
 
