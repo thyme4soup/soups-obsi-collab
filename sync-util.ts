@@ -34,8 +34,9 @@ export class SyncUtil {
     secretKey: string | null = null;
     endpoint: string | null = null;
 
-    constructor(app: App, endpoint: string) {
+    constructor(app: App, endpoint: string, userId: string | null = null) {
         this.app = app;
+        this.userId = userId;
         // remove trailing slash
         if (endpoint.endsWith("/")) {
             this.endpoint = endpoint.slice(0, -1);
@@ -93,8 +94,11 @@ export class SyncUtil {
                 content: content
             })
         });
-        let responseJSON = await response.json()
-        this.userId = this.userId || responseJSON.userId;
+        let responseJSON = await response.json();
+        if (this.userId == null && responseJSON.userId) {
+            this.userId = this.userId || responseJSON.userId;
+        }
+
         if (responseJSON.status == 409) {
             if (responseJSON.content.contains("File is deleted")) {
                 throw new FileDeletedError("File is deleted");

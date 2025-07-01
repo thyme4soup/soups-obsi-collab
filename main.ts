@@ -7,11 +7,13 @@ import { get } from 'http';
 interface PluginSettings {
 	brokerEndpoint: string;
 	sharedFolders: {[path:string]: string};
+	userId: string | null;
 }
 
 const DEFAULT_SETTINGS: PluginSettings = {
 	brokerEndpoint: 'http://localhost:5000',
-	sharedFolders: {}
+	sharedFolders: {},
+	userId: null,
 }
 const SHARED_FOLDER_ROOT = "Shared"
 
@@ -130,7 +132,7 @@ export default class MyPlugin extends Plugin {
 
 	async loadSettings() {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-		this.syncUtil = new SyncUtil(this.app, this.settings.brokerEndpoint)
+		this.syncUtil = new SyncUtil(this.app, this.settings.brokerEndpoint, this.settings.userId);
 		let sharedFolders = Object.keys(this.settings.sharedFolders);
 		for (let folder of sharedFolders) {
 			let files = this.app.vault.getFiles().filter((file) => {
@@ -139,6 +141,11 @@ export default class MyPlugin extends Plugin {
 			for (let file of files) {
 				await this.registerFile(file, this.settings.sharedFolders[folder]);
 			}
+		}
+		if (this.settings.userId == null && this.syncUtil.userId != null) {
+			this.settings.userId = this.syncUtil.userId;
+			await this.saveSettings();
+			console.log("User ID set to", this.settings.userId);
 		}
 	}
 
@@ -318,6 +325,12 @@ export default class MyPlugin extends Plugin {
 		} else if (Object.keys(this.settings.sharedFolders).some((root) => file.path.startsWith(this.getRootPath(root)))) {
 			console.log("Registering file", file.path);
 			await this.registerFile(file, this.getSharedRoot(file));
+		}
+		// Finally, cache our userId if it got set by the server
+		if (this.settings.userId == null && this.syncUtil.userId != null) {
+			this.settings.userId = this.syncUtil.userId;
+			await this.saveSettings();
+			console.log("User ID set to", this.settings.userId);
 		}
 	}
 
